@@ -5,12 +5,13 @@ export const TANGENT: 1;
 export const CROSSES_ONCE: 2;
 export const CROSSES_TWICE: 3;
 export const ENDPOINT_ON_CIRCLE: 4;
+export const BOTH_ENDPOINTS_ON_CIRCLE: 5;
 /** Classifies circumference intersections. Endpoint contact takes precedence; negative radius throws RangeError. */
 export function segmentCircle(
     ax: number, ay: number,
     bx: number, by: number,
     cx: number, cy: number,
-    radius: number): 0 | 1 | 2 | 3 | 4;
+    radius: number): 0 | 1 | 2 | 3 | 4 | 5;
 
 export function orient2d(
     ax: number, ay: number,

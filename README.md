@@ -63,11 +63,16 @@ Robustly classifies intersections between the closed segment `ab` and the circum
 | `TANGENT` | 1 | One contact in the segment's interior without crossing. |
 | `CROSSES_ONCE` | 2 | One endpoint strictly inside and the other strictly outside. |
 | `CROSSES_TWICE` | 3 | Both endpoints outside; the segment enters and exits the disk. |
-| `ENDPOINT_ON_CIRCLE` | 4 | Either or both endpoints on the circumference; takes precedence over other results. |
+| `ENDPOINT_ON_CIRCLE` | 4 | Exactly one endpoint on the circumference, or a zero-length segment on it; takes precedence over interior intersections. |
+| `BOTH_ENDPOINTS_ON_CIRCLE` | 5 | Two distinct endpoints on the circumference (a chord). |
 
 A zero-length segment returns `ENDPOINT_ON_CIRCLE` when on the circumference and `NONE` otherwise. Radius zero is allowed: a segment passing through the center in its interior returns `TANGENT`. A negative radius throws `RangeError`.
 
-The function uses certified interval sign filters and exact expansion arithmetic when a sign is uncertain, including exact equality tests on the represented input values. As with the existing expansion predicates, inputs must be finite and intermediate calculations must avoid overflow and destructive underflow. This is not a guarantee across all finite JavaScript numbers; in particular, the discriminant has degree four, so its usable scale range differs from `orient2d`'s degree-two determinant. No fixed epsilon is used.
+The function uses specialized adaptive sign predicates for endpoint distance, segment projection, and the line–circle discriminant. Like `orient2d`, each starts with scalar arithmetic and a proven rounding error bound, then refines uncertain signs using expansions of rounded differences, subtraction-tail corrections, and finally complete exact expansions. Refinement happens independently for each predicate, using reusable buffers. Exact equality refers to the represented input values; no fixed epsilon is used.
+
+As with the existing expansion predicates, inputs must be finite and intermediate calculations must avoid overflow and destructive underflow. This is not a guarantee across all finite JavaScript numbers; in particular, the discriminant has degree four, so its usable scale range differs from `orient2d`'s degree-two determinant.
+
+Run `npm run bench -- --segment-circle` to benchmark ordinary, near-tangent, and exact-boundary inputs. The benchmark reports the median of five runs after warmup and a result checksum.
 
 ## Example
 

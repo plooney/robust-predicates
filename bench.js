@@ -3,7 +3,47 @@ import * as fs from 'fs';
 import robustOrientation from 'robust-orientation';
 import robustInSphere from 'robust-in-sphere';
 
-import {orient2d, orient3d, incircle, insphere} from './index.js';
+import {orient2d, orient3d, incircle, insphere, segmentCircle} from './index.js';
+
+// Run just these workloads with: npm run bench -- --segment-circle
+{
+    let seed = 123456789;
+    const random = () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 2 ** 32;
+    };
+    const ordinary = Array.from({length: 256}, () => {
+        const args = Array.from({length: 7}, () => (random() - 0.5) * 16);
+        args[6] = Math.abs(args[6]);
+        return args;
+    });
+    const nearTangent = Array.from({length: 256}, (_, i) => [7, 1, -1, 7, 0, 0, 5 + (i % 3 - 1) * 2 ** -50]);
+    const boundary = [
+        [-1, 0, 1, 0, 0, 0, 1], [1, 0, 0, 1, 0, 0, 1],
+        [-2, 1, 2, 1, 0, 0, 1], [0, 0, 1, 0, 0, 0, 1]
+    ];
+    for (const [name, inputs] of [['ordinary', ordinary], ['near tangent', nearTangent], ['boundary', boundary]]) {
+        const run = () => {
+            let checksum = 0;
+            for (let i = 0; i < 100000; i++) {
+                const a = inputs[i % inputs.length];
+                checksum += segmentCircle(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+            }
+            return checksum;
+        };
+        run(); // warm up before timing
+        const times = [];
+        let checksum = 0;
+        for (let repeat = 0; repeat < 5; repeat++) {
+            const start = performance.now();
+            checksum += run();
+            times.push(performance.now() - start);
+        }
+        times.sort((a, b) => a - b);
+        console.log(`100000 x segmentCircle ${name}: ${times[2].toFixed(2)} ms (median of 5, checksum ${checksum})`);
+    }
+}
+if (process.argv.includes('--segment-circle')) process.exit(0);
 
 {
     const r = 0.95;

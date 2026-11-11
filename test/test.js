@@ -10,7 +10,7 @@ import {
     orient3d, orient3dfast,
     incircle, incirclefast,
     insphere, inspherefast,
-    segmentCircle, NONE, TANGENT, CROSSES_ONCE, CROSSES_TWICE, ENDPOINT_ON_CIRCLE
+    segmentCircle, NONE, TANGENT, CROSSES_ONCE, CROSSES_TWICE, ENDPOINT_ON_CIRCLE, BOTH_ENDPOINTS_ON_CIRCLE
 } from '../index.js';
 
 test('segmentCircle', () => {
@@ -23,17 +23,18 @@ test('segmentCircle', () => {
 
 // Convert doubles to integers in common units of 2^-1074. This oracle uses
 // integer quadratic coefficients, independently of the production expansions.
+const oracleBits = new DataView(new ArrayBuffer(8));
+function exactInteger(x) {
+    oracleBits.setFloat64(0, x);
+    const word = oracleBits.getBigUint64(0);
+    const exponent = Number((word >> 52n) & 2047n);
+    const fraction = word & ((1n << 52n) - 1n);
+    const magnitude = exponent === 0 ? fraction : ((1n << 52n) | fraction) << BigInt(exponent - 1);
+    return x < 0 ? -magnitude : magnitude;
+}
+
 function circleOracle(ax, ay, bx, by, cx, cy, radius) {
-    const buffer = new DataView(new ArrayBuffer(8));
-    function integer(x) {
-        buffer.setFloat64(0, x);
-        const word = buffer.getBigUint64(0);
-        const exponent = Number((word >> 52n) & 2047n);
-        const fraction = word & ((1n << 52n) - 1n);
-        const magnitude = exponent === 0 ? fraction : ((1n << 52n) | fraction) << BigInt(exponent - 1);
-        return x < 0 ? -magnitude : magnitude;
-    }
-    [ax, ay, bx, by, cx, cy, radius] = [ax, ay, bx, by, cx, cy, radius].map(integer);
+    [ax, ay, bx, by, cx, cy, radius] = [ax, ay, bx, by, cx, cy, radius].map(exactInteger);
     const dx = bx - ax;
     const dy = by - ay;
     const fx = ax - cx;
@@ -42,6 +43,7 @@ function circleOracle(ax, ay, bx, by, cx, cy, radius) {
     const b = 2n * (dx * fx + dy * fy);
     const c = fx * fx + fy * fy - radius * radius;
     const end = a + b + c;
+    if (c === 0n && end === 0n && a !== 0n) return BOTH_ENDPOINTS_ON_CIRCLE;
     if (c === 0n || end === 0n) return ENDPOINT_ON_CIRCLE;
     if (a === 0n) return NONE;
     if ((c < 0n) !== (end < 0n)) return CROSSES_ONCE;
@@ -57,7 +59,10 @@ test('segmentCircle boundaries and degeneracies', () => {
         [[0, 0, 0, 0, 0, 0, 1], NONE],
         [[2, 0, 2, 0, 0, 0, 1], NONE],
         [[1, 0, 1, 0, 0, 0, 1], ENDPOINT_ON_CIRCLE],
-        [[-1, 0, 1, 0, 0, 0, 1], ENDPOINT_ON_CIRCLE],
+        [[-1, 0, 1, 0, 0, 0, 1], BOTH_ENDPOINTS_ON_CIRCLE],
+        [[1, 0, 0, 1, 0, 0, 1], BOTH_ENDPOINTS_ON_CIRCLE],
+        [[1, 0, 1, 2 ** -27, 0, 0, 1], ENDPOINT_ON_CIRCLE], // second point is strictly outside
+        [[0, 0, 0, 0, 0, 0, 0], ENDPOINT_ON_CIRCLE],
         [[1, 0, 2, 0, 0, 0, 1], ENDPOINT_ON_CIRCLE],
         [[0, 0, 1, 2 ** -27, 0, 0, 1], CROSSES_ONCE], // rounded distance is 1
         [[-2, nextafter(1, 0), 2, nextafter(1, 0), 0, 0, 1], CROSSES_TWICE],
@@ -102,6 +107,66 @@ test('segmentCircle exact oracle', () => {
             }
         }
     }
+});
+
+// Instrument a private copy of the compiled module: no development counters or
+// private predicate exports are included in the published runtime module.
+test('segmentCircle adaptive stages and certified signs', async (t) => {
+    let source = fs.readFileSync(new URL('../esm/segmentCircle.js', import.meta.url), 'utf8');
+    source = source.replace('\'./util.js\'', JSON.stringify(new URL('../esm/util.js', import.meta.url).href));
+    source = source.replace(/return ([^;\n]+); \/\/ stage ([A-Z])/g,
+        (_, value, stage) => `{ stages.${stage}++; return ${value}; }`);
+    source += '\nconst stages = {A:0,B:0,C:0,D:0,Z:0}; export {stages,distanceSign,projectionSign,discriminantSign};';
+    const adaptive = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+    const sign = n => (n < 0n ? -1 : n > 0n ? 1 : 0);
+    const reference = {
+        distanceSign(ax, ay, cx, cy, r) {
+            const x = ax - cx;
+            const y = ay - cy;
+            return sign(x * x + y * y - r * r);
+        },
+        projectionSign(px, py, ax, ay, bx, by, cx, cy) {
+            return sign((px - cx) * (bx - ax) + (py - cy) * (by - ay));
+        },
+        discriminantSign(ax, ay, bx, by, cx, cy, r) {
+            const x = bx - ax;
+            const y = by - ay;
+            const u = ax - cx;
+            const v = ay - cy;
+            const cross = x * v - y * u;
+            return sign(r * r * (x * x + y * y) - cross * cross);
+        }
+    };
+    function check(name, args, stage) {
+        const before = stage ? adaptive.stages[stage] : 0;
+        const expected = reference[name](...args.map(exactInteger));
+        const actual = adaptive[name](...args);
+        assert.equal(actual === 0 ? 0 : actual, expected, `${name}: ${args}`);
+        if (stage) assert.equal(adaptive.stages[stage], before + 1, `expected stage ${stage}`);
+    }
+    check('distanceSign', [2, 1, 0, 0, 1], 'A');
+    check('distanceSign', [1, 2 ** -27, 0, 0, 1], 'Z');
+    check('discriminantSign', [7 * 2 ** 22, 2 ** 22, -(2 ** 22), 7 * 2 ** 22, 2 ** -53, 0, 5 * 2 ** 22], 'C');
+    check('discriminantSign', [7 * 2 ** -44, 2 ** -44, -(2 ** -44), 7 * 2 ** -44, 2 ** -144, 0, 5 * 2 ** -44], 'D');
+    check('discriminantSign', [7 * 2 ** -44, 2 ** -44, -(2 ** -44), 7 * 2 ** -44, 2 ** -89, 0, 5 * 2 ** -44], 'B');
+
+    let seed = 1234;
+    const random = () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 2 ** 32;
+    };
+    for (let i = 0; i < 3000; i++) {
+        const s = 2 ** (Math.floor(random() * 101) - 50);
+        const offset = (random() - 0.5) * s;
+        const tiny = 2 ** (-Math.floor(random() * 100) - 1) * s;
+        check('distanceSign', [s, tiny, offset, 0, Math.abs(s - offset)]);
+        check('projectionSign', [s, s, tiny, 0, 2 * s, 2 * s, 0, 2 * s]);
+        check('discriminantSign', [7 * s, s, -s, 7 * s, tiny, 0, 5 * s]);
+        const args = [7 * s, s, -s, 7 * s, tiny, 0, 5 * s];
+        assert.equal(segmentCircle(...args), circleOracle(...args));
+        assert.equal(segmentCircle(args[2], args[3], args[0], args[1], ...args.slice(4)), circleOracle(...args));
+    }
+    t.diagnostic(`Predicate refinement counts on adversarial corpus: ${JSON.stringify(adaptive.stages)}`);
 });
 
 test('orient2d', () => {
