@@ -53,6 +53,22 @@ The points `a`, `b`, `c`, and `d` must be ordered so that they have a _positive 
 
 Simple, approximate, non-robust versions of predicates above. Use when robustness isn't needed.
 
+### `segmentCircle(ax,ay, bx,by, cx,cy, radius)`
+
+Robustly classifies intersections between the closed segment `ab` and the circumference of a circle centered at `(cx, cy)`. Returns an exported numeric constant:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `NONE` | 0 | No circumference intersection, including a segment entirely inside the disk. |
+| `TANGENT` | 1 | One contact in the segment's interior without crossing. |
+| `CROSSES_ONCE` | 2 | One endpoint strictly inside and the other strictly outside. |
+| `CROSSES_TWICE` | 3 | Both endpoints outside; the segment enters and exits the disk. |
+| `ENDPOINT_ON_CIRCLE` | 4 | Either or both endpoints on the circumference; takes precedence over other results. |
+
+A zero-length segment returns `ENDPOINT_ON_CIRCLE` when on the circumference and `NONE` otherwise. Radius zero is allowed: a segment passing through the center in its interior returns `TANGENT`. A negative radius throws `RangeError`.
+
+The function uses certified interval sign filters and exact expansion arithmetic when a sign is uncertain, including exact equality tests on the represented input values. As with the existing expansion predicates, inputs must be finite and intermediate calculations must avoid overflow and destructive underflow. This is not a guarantee across all finite JavaScript numbers; in particular, the discriminant has degree four, so its usable scale range differs from `orient2d`'s degree-two determinant. No fixed epsilon is used.
+
 ## Example
 
 ```js

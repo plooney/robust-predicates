@@ -9,8 +9,100 @@ import {
     orient2d, orient2dfast,
     orient3d, orient3dfast,
     incircle, incirclefast,
-    insphere, inspherefast
+    insphere, inspherefast,
+    segmentCircle, NONE, TANGENT, CROSSES_ONCE, CROSSES_TWICE, ENDPOINT_ON_CIRCLE
 } from '../index.js';
+
+test('segmentCircle', () => {
+    assert.equal(segmentCircle(0, 2, 2, 2, 1, 0, 1), NONE);
+    assert.equal(segmentCircle(-2, 1, 2, 1, 0, 0, 1), TANGENT);
+    assert.equal(segmentCircle(0, 0, 2, 0, 0, 0, 1), CROSSES_ONCE);
+    assert.equal(segmentCircle(-2, 0, 2, 0, 0, 0, 1), CROSSES_TWICE);
+    assert.equal(segmentCircle(0, 0, 1, 0, 0, 0, 1), ENDPOINT_ON_CIRCLE);
+});
+
+// Convert doubles to integers in common units of 2^-1074. This oracle uses
+// integer quadratic coefficients, independently of the production expansions.
+function circleOracle(ax, ay, bx, by, cx, cy, radius) {
+    const buffer = new DataView(new ArrayBuffer(8));
+    function integer(x) {
+        buffer.setFloat64(0, x);
+        const word = buffer.getBigUint64(0);
+        const exponent = Number((word >> 52n) & 2047n);
+        const fraction = word & ((1n << 52n) - 1n);
+        const magnitude = exponent === 0 ? fraction : ((1n << 52n) | fraction) << BigInt(exponent - 1);
+        return x < 0 ? -magnitude : magnitude;
+    }
+    [ax, ay, bx, by, cx, cy, radius] = [ax, ay, bx, by, cx, cy, radius].map(integer);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const fx = ax - cx;
+    const fy = ay - cy;
+    const a = dx * dx + dy * dy;
+    const b = 2n * (dx * fx + dy * fy);
+    const c = fx * fx + fy * fy - radius * radius;
+    const end = a + b + c;
+    if (c === 0n || end === 0n) return ENDPOINT_ON_CIRCLE;
+    if (a === 0n) return NONE;
+    if ((c < 0n) !== (end < 0n)) return CROSSES_ONCE;
+    if (c < 0n || b >= 0n || -b >= 2n * a) return NONE;
+    const discriminant = b * b - 4n * a * c;
+    return discriminant < 0n ? NONE : discriminant === 0n ? TANGENT : CROSSES_TWICE;
+}
+
+test('segmentCircle boundaries and degeneracies', () => {
+    const cases = [
+        [[2, 1, 3, 1, 0, 0, 1], NONE], // tangent to supporting line only
+        [[-0.5, 0, 0.5, 0, 0, 0, 1], NONE],
+        [[0, 0, 0, 0, 0, 0, 1], NONE],
+        [[2, 0, 2, 0, 0, 0, 1], NONE],
+        [[1, 0, 1, 0, 0, 0, 1], ENDPOINT_ON_CIRCLE],
+        [[-1, 0, 1, 0, 0, 0, 1], ENDPOINT_ON_CIRCLE],
+        [[1, 0, 2, 0, 0, 0, 1], ENDPOINT_ON_CIRCLE],
+        [[0, 0, 1, 2 ** -27, 0, 0, 1], CROSSES_ONCE], // rounded distance is 1
+        [[-2, nextafter(1, 0), 2, nextafter(1, 0), 0, 0, 1], CROSSES_TWICE],
+        [[-2, nextafter(1, 2), 2, nextafter(1, 2), 0, 0, 1], NONE],
+        [[-1, 0, 1, 0, 0, 0, 0], TANGENT],
+        [[0, 0, 1, 0, 0, 0, 0], ENDPOINT_ON_CIRCLE],
+        [[0, 1, 1, 1, 0, 0, 0], NONE]
+    ];
+    for (const [args, expected] of cases) {
+        assert.equal(circleOracle(...args), expected);
+        assert.equal(segmentCircle(...args), expected, args.join(','));
+        const [ax, ay, bx, by, cx, cy, radius] = args;
+        assert.equal(segmentCircle(bx, by, ax, ay, cx, cy, radius), expected);
+        assert.equal(segmentCircle(-ax, -ay, -bx, -by, -cx, -cy, radius), expected);
+        for (const exponent of [-100, -20, 20, 100]) {
+            assert.equal(segmentCircle(...args.map(x => x * 2 ** exponent)), expected);
+        }
+    }
+    assert.throws(() => segmentCircle(0, 0, 1, 0, 0, 0, -1), RangeError);
+    assert.equal(segmentCircle(0, 0, 1, 0, 0, 0, -0), ENDPOINT_ON_CIRCLE);
+});
+
+test('segmentCircle exact oracle', () => {
+    let seed = 123456789;
+    const random = () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 2 ** 32;
+    };
+    for (let i = 0; i < 1500; i++) {
+        const factor = 2 ** (Math.floor(random() * 201) - 100);
+        const args = Array.from({length: 7}, () => (random() - 0.5) * factor);
+        args[6] = Math.abs(args[6]);
+        assert.equal(segmentCircle(...args), circleOracle(...args), args.join(','));
+    }
+    // Oblique tangents with exact integer geometry; perturb endpoints or radius
+    // by one ULP, and translate to exercise coordinate subtraction tails.
+    for (const offset of [0, 0.125, 2 ** 30]) {
+        for (const radius of [nextafter(5, 0), 5, nextafter(5, Infinity)]) {
+            for (const x of [nextafter(7, 0), 7, nextafter(7, Infinity)]) {
+                const args = [x + offset, 1 + offset, -1 + offset, 7 + offset, offset, offset, radius];
+                assert.equal(segmentCircle(...args), circleOracle(...args), args.join(','));
+            }
+        }
+    }
+});
 
 test('orient2d', () => {
     assert.ok(orient2d(0, 0, 1, 1, 0, 1) < 0, 'clockwise');
